@@ -16,8 +16,7 @@ type Inspector struct {
 	output chan string
 	mutex  sync.Mutex
 
-	waiters      int
-	counterMutex sync.Mutex
+	wg sync.WaitGroup
 }
 
 func hasChildren(target string) bool {
@@ -42,7 +41,7 @@ func atomicMessage[T any](c chan T, msg T, m *sync.Mutex) {
 	c <- msg
 }
 
-func (i *Inspector) parInspect(root string, index int) {
+func (i *Inspector) inspect(root string, index int) {
 
 	thisDir, _ := os.ReadDir(root)
 
@@ -51,9 +50,9 @@ func (i *Inspector) parInspect(root string, index int) {
 	})
 
 	for _, folder := range folders {
-		// i.wg.Add(1)
-		i.waiters++
-		go i.parInspect(filepath.Join(root, folder.Name()), index+1)
+		i.wg.Add(1)
+		// i.waiters++
+		go i.inspect(filepath.Join(root, folder.Name()), index+1)
 	}
 
 	for _, entry := range thisDir {
@@ -64,8 +63,10 @@ func (i *Inspector) parInspect(root string, index int) {
 		}
 	}
 
-	i.waiters--
-	if i.waiters == 0 {
+	i.wg.Done()
+
+	if index == 0 {
+		i.wg.Wait()
 		close(i.output)
 	}
 
@@ -76,6 +77,7 @@ func (i *Inspector) consumer() {
 	var acc []string
 
 	for k := range i.output {
+		fmt.Println("Found: ", k)
 		acc = append(acc, k)
 	}
 
@@ -92,9 +94,17 @@ func (i *Inspector) consumer() {
 
 }
 
+func sanitize() (args []string) {
+
+	args = os.Args[1:]
+
+	return
+}
+
 func main() {
 
 	args := os.Args[1:]
+
 	fmt.Println("root: ", args[0], "\ntrgt: ", args[1])
 
 	root := args[0]
@@ -104,11 +114,10 @@ func main() {
 		replace: args[2],
 
 		output: make(chan string),
-		done:   make(chan bool),
 	}
 
-	// inspector.wg.Add(1)
-	go inspector.parInspect(root, 0)
+	inspector.wg.Add(1)
+	go inspector.inspect(root, 0)
 
 	inspector.consumer()
 
