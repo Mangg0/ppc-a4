@@ -9,7 +9,11 @@ import (
 	"sync"
 )
 
-type Inspector struct {
+/**
+*	Simple struct to help our goal
+*
+ */
+type sniffer struct {
 	target  string
 	replace string
 
@@ -19,13 +23,19 @@ type Inspector struct {
 	wg sync.WaitGroup
 }
 
+/**
+*	Basic helper function, checks if a give folder/file has children
+ */
 func hasChildren(target string) bool {
-
 	res, _ := os.ReadDir(target)
-
 	return len(res) > 0
 }
 
+/**
+*	General purpose function, filters an array,
+*		returning the elements selected by func f
+*
+ */
 func filter[T any](origin []T, f func(T) bool) (ret []T) {
 	for _, el := range origin {
 		if f(el) {
@@ -35,13 +45,14 @@ func filter[T any](origin []T, f func(T) bool) (ret []T) {
 	return
 }
 
+// General purpose message sending syncronization
 func atomicMessage[T any](c chan T, msg T, m *sync.Mutex) {
 	m.Lock()
 	defer m.Unlock()
 	c <- msg
 }
 
-func (i *Inspector) inspect(root string, index int) {
+func (i *sniffer) sniff(root string, index int) {
 
 	thisDir, _ := os.ReadDir(root)
 
@@ -52,73 +63,91 @@ func (i *Inspector) inspect(root string, index int) {
 	for _, folder := range folders {
 		i.wg.Add(1)
 		// i.waiters++
-		go i.inspect(filepath.Join(root, folder.Name()), index+1)
+		go i.sniff(filepath.Join(root, folder.Name()), index+1)
 	}
 
 	for _, entry := range thisDir {
 		if strings.Contains(entry.Name(), i.target) {
-			// fmt.Println("Aquiring lock...")
 			atomicMessage(i.output, filepath.Join(root, entry.Name()), &i.mutex)
-			// fmt.Println("Released Lock!")
 		}
 	}
 
 	i.wg.Done()
 
 	if index == 0 {
+		// fmt.Println("Waiting...")
 		i.wg.Wait()
 		close(i.output)
 	}
 
 }
 
-func (i *Inspector) consumer() {
+func (i *sniffer) modify() {
 
 	var acc []string
 
 	for k := range i.output {
-		fmt.Println("Found: ", k)
+		// fmt.Println("Found: ", k)
 		acc = append(acc, k)
 	}
 
-	// fmt.Println("==== Done collecting ====")
+	var count int = 0
 
 	for _, el := range acc {
 
 		err := os.Rename(el, strings.ReplaceAll(el, i.target, i.replace))
 		for err != nil {
 			err = os.Rename(strings.Replace(el, i.target, i.replace, 1), strings.ReplaceAll(el, i.target, i.replace))
+
+			if err != nil && strings.ContainsAny(err.Error(), "file exists") {
+				err = nil
+			}
 		}
+		count++
 
 	}
 
+	fmt.Printf("Found and renamed %d/%d items\n", count, len(acc))
+
 }
 
-func sanitize() (args []string) {
+func buildSniffer() (i sniffer, root string) {
 
-	args = os.Args[1:]
-
-	return
-}
-
-func main() {
+	// fmt.Println(len(os.Args), " -> ", os.Args)
 
 	args := os.Args[1:]
 
-	fmt.Println("root: ", args[0], "\ntrgt: ", args[1])
+	if len(args) < 3 {
+		fmt.Println("Bad arguments -> rename <root-folder> <target-string> <replace-string>")
+		os.Exit(-1)
+	}
 
-	root := args[0]
+	if len(args) > 3 {
+		fmt.Printf("Too many arguments, ignoring: ")
+		for _, arg := range args[3:] {
+			fmt.Printf("<%s> ", arg)
+		}
+		fmt.Println()
+	}
 
-	inspector := Inspector{
+	root = args[0]
+
+	i = sniffer{
 		target:  args[1],
 		replace: args[2],
 
 		output: make(chan string),
 	}
 
-	inspector.wg.Add(1)
-	go inspector.inspect(root, 0)
+	return
+}
 
-	inspector.consumer()
+func main() {
+
+	sniffer, root := buildSniffer()
+
+	sniffer.wg.Add(1)
+	go sniffer.sniff(root, 0)
+	sniffer.modify()
 
 }
